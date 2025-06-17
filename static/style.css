@@ -1,0 +1,30 @@
+
+
+/* Header layout styling */
+.header-container {
+    margin-bottom: 1rem;
+    overflow: hidden; /* Clearfix */
+}
+
+.header-container * {
+    float: left;
+    margin-right: 1rem;
+}
+
+.header-container > div:last-child {
+    float: right;
+}
+@media (min-width: 769px) {
+    .header-container > div, .header-container > p {
+        line-height: 2.5rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .header-container > * {
+        float: none;
+        display: block;
+        width: 100%;
+        margin: 0.25rem 0;
+    }
+}

@@ -1,0 +1,5 @@
+python-fasthtml
+monsterui
+python-dotenv
+fastmigrate
+cdp-sdk
