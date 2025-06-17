@@ -11,6 +11,7 @@ from fasthtml.common import *
 from fasthtml.oauth import GoogleAppClient, OAuth
 from fastcore.all import *
 from monsterui.all import *
+import resend
 
 import db
 import x402
@@ -21,10 +22,15 @@ logger = logging.getLogger(__name__)
 
 load_dotenv()
 
+# Initialize Resend
+resend.api_key = os.environ.get("RESEND_API_KEY")
+
 
 SERVER_URL = 'http://localhost:5001'
 
-cli = GoogleAppClient.from_file('client_secret.json')
+cli = GoogleAppClient(client_id=os.environ["CLIENT_ID"],
+                      client_secret=os.environ["CLIENT_SECRET"],
+                      project_id=os.environ["PROJECT_ID"])
 class Auth(OAuth):
     def get_auth(self, info, ident, session, state):
         email = info.email or ''
@@ -35,7 +41,9 @@ class Auth(OAuth):
 
 hdrs = (
     Theme.blue.headers(),
-    Link(rel='stylesheet', href='/static/style.css', type='text/css')
+    Link(rel='stylesheet', href='/static/css/style.css', type='text/css'),
+    # Script("htmx.logAll();") # debug HTMX events
+
 )
 
 
@@ -50,7 +58,7 @@ app.static_route_exts(prefix='/static', static_path='static', exts='static')
 app.static_route_exts(prefix='/files', static_path='data/files', exts='static')
 
 # Skip routes that don't need authentication (otherwise they'll return a 303 redirect)
-skip = ('/login', '/logout', '/redirect', '/static', '/files/.*/.*', '/forward/.*')
+skip = ('/login', '/logout', '/redirect', '/static/.*/.*', '/files/.*/.*', '/forward/.*')
 oauth = Auth(app, cli, skip=skip)
 
 
@@ -58,44 +66,56 @@ data_dir = Path("data/files")
 
 def UserMenu(email: str): return DivHStacked(P(email), A("Logout", href="/logout"))
 
-@app.get('/login')
+def ByFewsats(): 
+    return DivHStacked(
+            P("by ", cls=[TextPresets.muted_sm, "mr-0"]),
+            A(Img(src="https://icons-8e9.pages.dev/Black%20logo%20-%20no%20background.png", width=100),
+                href="https://fewsats.com", target="_blank")
+        )
+
+def MainLogo():
+    return DivVStacked(
+            H1('Forward X402', cls="text-center pb-4"),
+            ByFewsats(),
+        )
+
+@rt('/login')
 def login(req): 
     return (
         Title("Forward X402 - Login"),
         Favicon("https://icons-8e9.pages.dev/favicon-black.svg", "https://icons-8e9.pages.dev/favicon.svg"),
         DivVStacked(
-            Img(src="https://icons-8e9.pages.dev/favicon-black.svg", width=100),
-            DivVStacked(
-                H1('Forward X402', cls="text-center"),
-                P("Forget spammy emails with low signal. If someone really needs your atttention let them pay for it.", cls=TextPresets.muted_sm + " text-center"),
-                A(Button("Log in with Google"), href=oauth.login_link(req))
-            ),
+            MainLogo(),
             cls="pt-[20vh]",
         ),
+        DivVStacked(
+            P("Forget spammy emails with low signal. If someone really needs your atttention let them pay for it.", cls=TextPresets.muted_sm + " text-center"),
+            A(Button("Log in with Google"), href=oauth.login_link(req), cls='mt-4'),
+            cls="p-8",
+        )
     )
 
-@app.get('/logout')
+@rt('/logout')
 def logout(session):
     session.pop('auth', None)
     return RedirectResponse('/login', status_code=303)
 
 def NavBar(user):
     return Div(
-        A(
-            Img(src="https://icons-8e9.pages.dev/favicon-black.svg", width=40),
-            H1('Forward X402', href="/"), 
-            href="/"
+        DivHStacked(
+            A(H1('Forward X402'),  href="/"),
+            ByFewsats(),
         ),
         UserMenu(user.email),
         cls="header-container"
     )
 
-@app.get
+@rt
 def index(auth):
     user = db.get_user(auth)
     endpoints = db.list_endpoints_by_user(auth)
     
-    return (Title("Email Endpoints - Dashboard"),
+    return (Title("Forward X402 - Dashboard"),
             Favicon("https://icons-8e9.pages.dev/favicon-black.svg", "https://icons-8e9.pages.dev/favicon.svg"), 
             Container(
                 NavBar(user),
@@ -173,29 +193,83 @@ def create_endpoint(email: str,  base_price: float, label: str = "", auth = ''):
     return EndpointsContainer(endpoints)
 
 @app.get("/forward/{short_url}")
-def forward_endpoint(short_url: str):
+async def forward_endpoint(short_url: str, request: Request):
     endpoint = db.get_endpoint_by_short_url(short_url)
     if not endpoint: return
     
+    # Get payment requirements
+    payment_data = await get_payment_requirements(endpoint, str(request.url).replace('/forward/', '/forward/'))
+    
     curl_example = f"""curl -X POST {SERVER_URL}/forward/{short_url} \\
   -H "Content-Type: application/json" \\
+  -H "X-PAYMENT: YOUR_PAYMENT_HEADER" \\
   -d '{{
     "email": "your@email.com",
     "subject": "Your Subject Here", 
     "message": "Your message content here"
   }}'"""
     
-    return DivVStacked(
+    return (
         Title(f"Forward X402 - {endpoint.label or 'Email Endpoint'}"),
-        Container(
-            H1(f"Send Email to {endpoint.label}"),
-            P(f"Price: ${endpoint.base_price:.6f} USDC"),
-            H2("How to Send a Paid Email"),
-            P("Send a POST request with your email details to trigger the X402 payment flow:"),
-            Pre(Code(curl_example, cls="language-bash")),
-
+        Favicon("https://icons-8e9.pages.dev/favicon-black.svg", "https://icons-8e9.pages.dev/favicon.svg"),
+        Script(src='/static/js/wallet-reown-bundle.umd.js'),
+        Link(rel='stylesheet', href='/static/css/wallet.css', type='text/css'),
+        Script(src='/static/js/forward-payment.js'),
+        DivVStacked(
+            Container(
+                DivHStacked(
+                    A(H1('Forward X402'),  href="/", cls="mr-4"),
+                    ByFewsats(),
+                    cls="justify-center mb-8"
+                ),
+                Card(
+                    H3("Send Email to `" + endpoint.label + "`", cls="text-lg font-semibold mb-4"),
+                    P(f"Price: ${endpoint.base_price:.6f} USDC", cls="text-gray-700 mb-6"),
+                    Form(
+                        Input(placeholder="Your email", name="email", required=True, value='post@example.com', cls="w-full border border-gray-300 p-2 mb-4"),
+                        Input(placeholder="Subject", name="subject", required=True, value='Test Subject', cls="w-full border border-gray-300 p-2 mb-4"),
+                        Textarea('Test Message', placeholder="Message", name="message", required=True, cls="w-full border border-gray-300 p-2 mb-4 min-h-[120px]"),
+                        Input(placeholder="X402 Payment Header", name="x402_header", required=True, value='test', cls="w-full border border-gray-300 p-2 mb-4"),
+                    ),
+                    Button("Connect Wallet", cls="wallet-connect btn btn-primary w-full p-2 mb-4"),
+                    Button("Pay", cls="wallet-pay btn btn-success w-full p-2", data_payment=payment_data),
+                ),
+                Card(
+                    Details(
+                        Summary("Or use cURL:"),
+                        Pre(Code(curl_example, cls="language-bash p-4")),
+                    ),
+                ),
+            ),
         )
     )
+
+async def get_payment_requirements(endpoint, request_url):
+    """Get X402 payment requirements for an endpoint"""
+    facilitator_config = x402.create_x402_facilitator_config()
+    amount = Decimal(str(endpoint.base_price))
+    
+    response = await x402.payment_middleware(
+        url=request_url,
+        x_payment=None,  # No payment header to get requirements
+        user_agent="",
+        accept_header="application/json",
+        amount=amount,
+        address=os.environ.get("X402_PAYMENT_ADDRESS", ""),
+        facilitator_config=facilitator_config,
+        description=f"Send email to {endpoint.label}",
+        mime_type="application/json",
+        max_timeout_seconds=int(os.environ.get("X402_MAX_TIMEOUT_SECONDS", "300")),
+        testnet=os.environ.get("ENV", "dev") == "dev",
+        resource=f"/forward/{endpoint.short_url}"
+    )
+    
+    return json.dumps(json.loads(response.body.decode())['accepts'][0])
+
+
+async def parse_payload(request):
+    body = await request.json()
+    return body.get("email"), body.get("subject"), body.get("message"), request.headers.get("X-PAYMENT")
 
 @app.post("/forward/{short_url}")
 async def forward_payment(short_url: str, request: Request):
@@ -204,78 +278,48 @@ async def forward_payment(short_url: str, request: Request):
 
     if not endpoint: return JSONResponse(status_code=404, content={"error": "Endpoint not found"})
     
-    x_payment = request.headers.get("X-PAYMENT")
-    user_agent = request.headers.get("User-Agent", "")
-    accept_header = request.headers.get("Accept", "")
-    
-    # Parse JSON payload
-    try:
-        body = await request.json()
-        sender_email = body.get("email")
-        subject = body.get("subject") 
-        message = body.get("message")
-        
-        if not all([sender_email, subject, message]):
-            return JSONResponse(
-                status_code=400,
-                content={"error": "Missing required fields: email, subject, message"}
-            )
-    except Exception as e:
-        return JSONResponse(
-            status_code=400,
-            content={"error": "Invalid JSON payload"}
-        )
-    
-    # Create payment requirements
+    sender_email, subject, message, x_payment = await parse_payload(request)
+    if not all([sender_email, subject, message]): return JSONResponse(status_code=400, content={"error": "Missing required fields"})
+
+    # Process payment
     facilitator_config = x402.create_x402_facilitator_config()
     amount = Decimal(str(endpoint.base_price))
-    response = None
-    try:
-        response = await x402.payment_middleware(
-            url=str(request.url),
-            x_payment=x_payment,
-            user_agent=user_agent,
-            accept_header=accept_header,
-            amount=amount,
-            address=os.environ.get("X402_PAYMENT_ADDRESS", ""),
-            facilitator_config=facilitator_config,
-            description=f"Send email to {endpoint.label}",
-            mime_type="application/json",
-            max_timeout_seconds=int(os.environ.get("X402_MAX_TIMEOUT_SECONDS", "300")),
-            testnet=os.environ.get("ENV", "dev") == "dev",
-            resource=f"/forward/{short_url}"
-        )
+
+    response = await x402.payment_middleware(
+        url=str(request.url),
+        x_payment=x_payment,
+        user_agent=request.headers.get("User-Agent", ""),
+        accept_header=request.headers.get("Accept", ""),
+        amount=amount,
+        address=os.environ.get("X402_PAYMENT_ADDRESS", ""),
+        facilitator_config=facilitator_config,
+        description=f"Send email to {endpoint.label}",
+        mime_type="application/json",
+        max_timeout_seconds=int(os.environ.get("X402_MAX_TIMEOUT_SECONDS", "300")),
+        testnet=os.environ.get("ENV", "dev") == "dev",
+        resource=f"/forward/{short_url}"
+    )
         
-        # If payment successful (200 status), send email and update counters
-        if response.status_code == 200:
-            # TODO: Replace with actual email sending
-            logger.info("EMAIL SENT", extra={
-                "to": endpoint.email,
-                "from": sender_email,
-                "subject": subject,
-                "message": message,
-                "endpoint_id": endpoint.id
-            })
+    if response.status_code >= 400: return response
+    
+    # Send email via Resend
+    try:
+        params = {
+            "from": "noreply@fewsats.com",
+            "to": [endpoint.email],
+            "subject": f"[Paid Email] {subject}",
+            "html": f"<div><p><strong>From:</strong> {sender_email}</p><p><strong>Message:</strong></p><div>{message.replace(chr(10), '<br>')}</div></div>",
+            "reply_to": sender_email
+        }
+        
+        email_result = resend.Emails.send(params)
+        logger.info(f"Email sent successfully via Resend: {email_result}")
             
-            db.update_endpoint_counters(endpoint.id, payment_success=True)
-            
-            return JSONResponse(
-                status_code=200,
-                content={
-                    "success": True,
-                    "message": "Email sent successfully"
-                },
-                headers=dict(response.headers)
-            )
-        else:
-            # Return payment requirements or error
-            return response
-            
-    except Exception as e:
-        logger.error(f"Payment processing failed {e}", extra={"error": str(e)})
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Payment processing failed"}
+        return JSONResponse(status_code=200,
+            content={ "success": True,  "message": "Email sent successfully" },
         )
+    except Exception as e:
+        logger.error(f"Failed to send email via Resend: {e}")
+        return JSONResponse(status_code=500, content={"error": "Failed to send email"})
 
 serve()

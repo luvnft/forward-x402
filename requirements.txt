@@ -3,3 +3,4 @@ monsterui
 python-dotenv
 fastmigrate
 cdp-sdk
+resend
