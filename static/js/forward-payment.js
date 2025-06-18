@@ -1,15 +1,32 @@
 document.addEventListener('DOMContentLoaded', function() {
     console.log('DOM loaded, setting up wallet payment listener');
     
+    const payButton = document.querySelector('.wallet-pay');
+    
+    function setLoading(loading) {
+        if (loading) {
+            payButton.disabled = true;
+            payButton.innerHTML = '<span class="spinner"></span> Sending...';
+        } else {
+            payButton.disabled = false;
+            payButton.innerHTML = 'Pay';
+        }
+    }
+    
     // Handle payment response
     document.addEventListener('wallet-payment-response', async function(event) {
         console.log('wallet-payment-response received:', event);
         const { success, paymentHeader, error } = event.detail;
         
         if (success) {
+            // Set the payment header in the input field
+            const headerInput = document.querySelector('input[name="x402_header"]');
+            if (headerInput) {
+                headerInput.value = paymentHeader;
+            }
+            setLoading(true);
             console.log('Payment successful, submitting form with header:', paymentHeader);
             
-            // Submit the form with payment header
             const form = document.querySelector('form');
             const formData = new FormData(form);
             const data = {
@@ -29,6 +46,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 });
                 
                 const result = await response.json();
+                setLoading(false);
                 
                 if (response.ok) {
                     alert('Email sent successfully!');
@@ -37,6 +55,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             } catch (fetchError) {
                 console.error('Fetch error:', fetchError);
+                setLoading(false);
                 alert('Network error occurred');
             }
         } else {

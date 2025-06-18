@@ -26,7 +26,7 @@ load_dotenv()
 resend.api_key = os.environ.get("RESEND_API_KEY")
 
 
-SERVER_URL = 'http://localhost:5001'
+SERVER_URL = os.environ.get('SERVER_URL', 'http://localhost:5001')
 
 cli = GoogleAppClient(client_id=os.environ["CLIENT_ID"],
                       client_secret=os.environ["CLIENT_SECRET"],
@@ -34,7 +34,7 @@ cli = GoogleAppClient(client_id=os.environ["CLIENT_ID"],
 class Auth(OAuth):
     def get_auth(self, info, ident, session, state):
         email = info.email or ''
-        if info.email_verified and email.split('@')[-1]=='fewsats.com':
+        if info.email_verified:
             # Ensure user exists and set current user context
             db.ensure_user(info.sub, info.email, info.name, info.picture)
             return RedirectResponse('/', status_code=303)
@@ -42,7 +42,6 @@ class Auth(OAuth):
 hdrs = (
     Theme.blue.headers(),
     Link(rel='stylesheet', href='/static/css/style.css', type='text/css'),
-    # Script("htmx.logAll();") # debug HTMX events
 
 )
 
@@ -64,7 +63,12 @@ oauth = Auth(app, cli, skip=skip)
 
 data_dir = Path("data/files")
 
-def UserMenu(email: str): return DivHStacked(P(email), A("Logout", href="/logout"))
+def CodeButton(extra_cls=''): return A(Button(UkIcon("code", cls='mr-2'), "Code"), href="https://github.com/Fewsats/forward-x402", target="_blank", cls=f"text-sm {extra_cls}")
+
+def UserMenu(email: str): 
+    return DivHStacked(
+                    CodeButton(),
+                    P(email), A("Logout", href="/logout"))
 
 def ByFewsats(): 
     return DivHStacked(
@@ -89,7 +93,7 @@ def login(req):
             cls="pt-[20vh]",
         ),
         DivVStacked(
-            P("Forget spammy emails with low signal. If someone really needs your atttention let them pay for it.", cls=TextPresets.muted_sm + " text-center"),
+            P("Forget spammy emails with low signal. If someone really needs your attention let them pay for it.", cls=TextPresets.muted_sm + " text-center"),
             A(Button("Log in with Google"), href=oauth.login_link(req), cls='mt-4'),
             cls="p-8",
         )
@@ -226,13 +230,13 @@ async def forward_endpoint(short_url: str, request: Request):
                     H3("Send Email to `" + endpoint.label + "`", cls="text-lg font-semibold mb-4"),
                     P(f"Price: ${endpoint.base_price:.6f} USDC", cls="text-gray-700 mb-6"),
                     Form(
-                        Input(placeholder="Your email", name="email", required=True, value='post@example.com', cls="w-full border border-gray-300 p-2 mb-4"),
-                        Input(placeholder="Subject", name="subject", required=True, value='Test Subject', cls="w-full border border-gray-300 p-2 mb-4"),
-                        Textarea('Test Message', placeholder="Message", name="message", required=True, cls="w-full border border-gray-300 p-2 mb-4 min-h-[120px]"),
-                        Input(placeholder="X402 Payment Header", name="x402_header", required=True, value='test', cls="w-full border border-gray-300 p-2 mb-4"),
+                        Input(placeholder="Your email", name="email", required=True, cls="w-full border border-gray-300 p-2 mb-4"),
+                        Input(placeholder="Subject", name="subject", required=True, cls="w-full border border-gray-300 p-2 mb-4"),
+                        Textarea(placeholder="Message", name="message", required=True, cls="w-full border border-gray-300 p-2 mb-4 min-h-[120px]"),
+                        Input(placeholder="X402 Payment Header", name="x402_header", required=True, cls="w-full border border-gray-300 p-2 mb-4"),
                     ),
                     Button("Connect Wallet", cls="wallet-connect btn btn-primary w-full p-2 mb-4"),
-                    Button("Pay", cls="wallet-pay btn btn-success w-full p-2", data_payment=payment_data),
+                    Button("Pay & Send", cls="wallet-pay btn btn-success w-full p-2", data_payment=payment_data),
                 ),
                 Card(
                     Details(
